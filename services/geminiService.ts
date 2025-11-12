@@ -1,119 +1,187 @@
+/**
+ * services/geminiService.ts
+ * - Dùng 1 API key do người dùng nhập (localStorage) hoặc .env (fallback)
+ * - Không xoay nhiều key. Ưu tiên: apiKey param → localStorage('user_api_key') → import.meta.env.GEMINI_API_KEY
+ * - Cung cấp hàm generic generateJSON() + 3 hàm quen thuộc (story ideas / characters / script)
+ */
+
 import { GoogleGenAI, Type } from "@google/genai";
-import type { FormData, KeywordResult } from "../types";
+import { resolveApiKey } from "./userKey";
 
-const KEYWORD_SCHEMA = {
-  type: Type.OBJECT,
-  properties: {
-    keywords: {
-      type: Type.ARRAY,
-      description: "An array of keyword objects.",
-      items: {
-        type: Type.OBJECT,
-        properties: {
-          keyword: {
-            type: Type.STRING,
-            description: "The generated keyword in the target language.",
-          },
-          translation: {
-            type: Type.STRING,
-            description: "The Vietnamese translation of the keyword.",
-          },
-        },
-        required: ["keyword", "translation"],
-      },
-    },
-  },
-  required: ["keywords"],
-};
+// ========= Helpers =========
+function normalizeError(e: any): Error {
+  const msg = (e?.message || e || "").toString();
+  // gom vài lỗi phổ biến thành thông báo dễ hiểu
+  if (/quota|exceed|rate|429|overload|unavailable/i.test(msg)) {
+    return new Error("Model AI đang quá tải hoặc đã hết quota. Hãy thử lại sau hoặc dùng API key khác.");
+  }
+  if (/unauthorized|api key|invalid key|401|403/i.test(msg)) {
+    return new Error("API key không hợp lệ hoặc chưa được cấp quyền.");
+  }
+  return new Error(msg || "Lỗi không xác định từ Gemini API.");
+}
 
-export const generateKeywords = async (formData: FormData): Promise<KeywordResult[]> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+function client(apiKey?: string) {
+  const key = resolveApiKey(apiKey);
+  return new GoogleGenAI({ apiKey: key });
+}
 
-  const prompt = `You are an expert in YouTube SEO and content strategy. Your task is to generate a list of high-traffic, low-competition keywords for a YouTube video.
-
-**Video Details:**
-*   **Main Topic:** ${formData.topic}
-*   **Primary Keywords:** ${formData.mainKeywords || "Not provided"}
-*   **Competitor Video for Analysis (optional):** ${formData.competitorUrl || "Not provided"}
-*   **Target Language:** ${formData.language}
-*   **Target Audience:** ${formData.audience}
-
-**Request:**
-1.  Generate exactly ${formData.count} unique keywords.
-2.  The keywords should be in the target language: "${formData.language}".
-3.  For each keyword, provide a Vietnamese translation.
-4.  The keywords should be creative, engaging, and highly relevant to the provided topic and primary keywords. If a competitor video is provided, analyze its title, description, and potential tags to find related but less competitive keyword opportunities.
-
-**Output Format:**
-Return the result as a single JSON object. Do not include any text, explanation, or markdown formatting before or after the JSON object. The JSON object must match the provided schema.
-`;
-
+// ========= Generic JSON caller =========
+/**
+ * Gọi model và ép trả JSON theo schema (GoogleGenAI Type schema)
+ */
+export async function generateJSON<T>(
+  contents: string,
+  schema: any,
+  {
+    model = "gemini-2.5-flash",
+    apiKey,
+  }: { model?: string; apiKey?: string } = {}
+): Promise<T> {
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
+    const ai = client(apiKey);
+    const res = await ai.models.generateContent({
+      model,
+      contents,
       config: {
         responseMimeType: "application/json",
-        responseSchema: KEYWORD_SCHEMA,
-        temperature: 0.8,
-        topP: 0.9,
+        responseSchema: schema,
       },
     });
-
-    const jsonText = response.text.trim();
-    const parsedJson = JSON.parse(jsonText);
-
-    if (parsedJson.keywords && Array.isArray(parsedJson.keywords)) {
-      return parsedJson.keywords;
-    } else {
-      throw new Error("Invalid JSON structure received from API.");
-    }
-  } catch (error) {
-    console.error("Error calling Gemini API:", error);
-    throw new Error(
-      "Failed to generate keywords. Please check your inputs or try again later."
-    );
+    const text = (res as any)?.text?.trim?.() || "";
+    return JSON.parse(text) as T;
+  } catch (e) {
+    throw normalizeError(e);
   }
-};
+}
 
-export const analyzeTrends = async (keywords: KeywordResult[], topic: string, language: string): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+// ========= Convenience functions (giữ API giống tool trước) =========
 
-  const keywordList = keywords.map(k => `- "${k.keyword}" (${k.translation})`).join('\n');
+// 1) Tạo ý tưởng câu chuyện
+export async function generateStoryIdeas(
+  idea: string,
+  style: string,
+  count: number,
+  apiKey?: string
+): Promise<Array<{ title: string; summary: string }>> {
+  const schema = {
+    type: Type.ARRAY,
+    items: {
+      type: Type.OBJECT,
+      properties: {
+        title: { type: Type.STRING },
+        summary: { type: Type.STRING },
+      },
+      required: ["title", "summary"],
+    },
+  };
+  const prompt = `Tạo ${count} ý tưởng câu chuyện dựa trên: "${idea}" theo phong cách "${style}".
+Trả về MẢNG JSON, mỗi phần tử có "title" và "summary".`;
+  return generateJSON(prompt, schema, { model: "gemini-2.5-flash", apiKey });
+}
 
-  const prompt = `Bạn là một chuyên gia phân tích xu hướng YouTube. Dựa vào danh sách từ khóa được cung cấp cho chủ đề "${topic}", hãy đưa ra một bản phân tích chi tiết về xu hướng và tiềm năng của chúng.
+// 2) Tạo nhân vật
+export async function generateCharacterDetails(
+  story: { title: string; summary: string },
+  numCharacters: number,
+  style: string,
+  apiKey?: string
+): Promise<Array<{ name: string; prompt: string }>> {
+  const schema = {
+    type: Type.ARRAY,
+    items: {
+      type: Type.OBJECT,
+      properties: {
+        name: { type: Type.STRING },
+        prompt: { type: Type.STRING },
+      },
+      required: ["name", "prompt"],
+    },
+  };
+  const contents = `Dựa trên câu chuyện "${story.title}" (tóm tắt: ${story.summary}), hãy tạo ${numCharacters} nhân vật chính.
+Mỗi nhân vật trả về "name" và "prompt" (tiếng Anh, mô tả chi tiết ngoại hình/phong cách theo "${style}").
+Kết quả là MẢNG JSON như yêu cầu.`;
+  // dùng pro cho phần này; nếu quota/overload thì thử lại flash
+  try {
+    return await generateJSON(contents, schema, { model: "gemini-2.5-pro", apiKey });
+  } catch {
+    return await generateJSON(contents, schema, { model: "gemini-2.5-flash", apiKey });
+  }
+}
 
-**Chủ đề chính:** ${topic}
-**Ngôn ngữ mục tiêu:** ${language}
+// 3) Viết kịch bản
+export interface Scene {
+  id: number;
+  description: string;
+  narration: string;
+  veo_prompt: string;
+  characters_present: string[];
+}
+export interface Script {
+  summary: string;
+  scenes: Scene[];
+}
 
-**Danh sách từ khóa:**
-${keywordList}
+export async function generateScript(
+  story: { title: string; summary: string },
+  characters: Array<{ name: string; prompt: string }>,
+  durationSec: number,
+  apiKey?: string
+): Promise<Script> {
+  const expectedScenes = Math.ceil(durationSec / 8);
+  const charDesc = characters.map(c => `- ${c.name}: ${c.prompt}`).join("\n");
 
-**Yêu cầu phân tích:**
-1.  **Đánh giá tổng quan:** Phân tích tiềm năng chung của các từ khóa này. Chúng có đang là xu hướng không? Mức độ cạnh tranh có thể như thế nào?
-2.  **Từ khóa nổi bật:** Chỉ ra 3-5 từ khóa có tiềm năng viral cao nhất hoặc đang có xu hướng tìm kiếm tăng mạnh. Giải thích tại sao.
-3.  **Từ khóa "Evergreen" (Xanh quanh năm):** Xác định những từ khóa có thể không tạo ra đột biến lớn ban đầu nhưng sẽ mang lại lượt xem ổn định theo thời gian.
-4.  **Gợi ý kết hợp:** Đề xuất một vài cách kết hợp các từ khóa này để tạo thành các tiêu đề video hấp dẫn, có khả năng thu hút cao.
-5.  **Lời khuyên cuối cùng:** Đưa ra một lời khuyên ngắn gọn cho nhà sáng tạo nội dung về cách tận dụng tốt nhất bộ từ khóa này.
+  const schema = {
+    type: Type.OBJECT,
+    properties: {
+      summary: { type: Type.STRING },
+      scenes: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            id: { type: Type.NUMBER },
+            description: { type: Type.STRING },
+            narration: { type: Type.STRING },
+            veo_prompt: { type: Type.STRING },
+            characters_present: { type: Type.ARRAY, items: { type: Type.STRING } },
+          },
+          required: ["id", "description", "narration", "veo_prompt", "characters_present"],
+        },
+      },
+    },
+    required: ["summary", "scenes"],
+  };
 
-Hãy trình bày câu trả lời bằng tiếng Việt, sử dụng định dạng rõ ràng, dễ đọc, với các tiêu đề được in đậm.
+  const contents = `Bạn là biên kịch. Hãy viết kịch bản video dài ${durationSec} giây (≈ ${expectedScenes} cảnh, mỗi cảnh 6–10 giây).
+Thông tin:
+- Tên: ${story.title}
+- Tóm tắt: ${story.summary}
+- Nhân vật:
+${charDesc}
+
+YÊU CẦU JSON:
+{
+  "summary": "tóm tắt kịch bản",
+  "scenes": [
+    {
+      "id": 1,
+      "description": "mô tả cảnh",
+      "narration": "lời dẫn",
+      "veo_prompt": "prompt để tạo video (Anh) – phải khớp mô tả cảnh",
+      "characters_present": ["Tên nhân vật..."]
+    }
+  ]
+}
+Quy tắc:
+- Mỗi cảnh phải có ít nhất 1 nhân vật trong "characters_present".
+- "narration" bắt buộc có nội dung.
+- "veo_prompt" phải ăn khớp mô tả cảnh và có tên nhân vật khi xuất hiện.
 `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-      config: {
-        temperature: 0.7,
-        topP: 0.9,
-      },
-    });
-    
-    return response.text;
-  } catch (error) {
-    console.error("Error calling Gemini API for trend analysis:", error);
-    throw new Error(
-      "Không thể phân tích xu hướng. Vui lòng thử lại sau."
-    );
+    return await generateJSON<Script>(contents, schema, { model: "gemini-2.5-pro", apiKey });
+  } catch {
+    return await generateJSON<Script>(contents, schema, { model: "gemini-2.5-flash", apiKey });
   }
-};
+}
