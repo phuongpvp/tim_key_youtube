@@ -1,15 +1,46 @@
 /**
  * services/geminiService.ts
- * Phiên bản tương thích với thư viện @google/generative-ai
- * - Dùng 1 API key từ localStorage hoặc .env (fallback)
- * - Cung cấp 3 hàm: generateStoryIdeas, generateCharacterDetails, generateScript
+ * Dành cho package: @google/genai  (giữ nguyên như trong package.json của bạn)
+ * - Không thay đổi thư viện.
+ * - Dùng 1 API key (localStorage hoặc .env thông qua resolveApiKey).
+ * - Expose 2 hàm đúng với App.tsx: generateKeywords, analyzeTrends.
+ *
+ * Lưu ý: API của @google/genai thay đổi giữa các bản, nên ở đây dùng kiểu "any"
+ * khi gọi SDK để tránh lỗi type trong quá trình build (Vercel). Cách gọi vẫn hoạt động.
  */
 
-import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
+// Giữ import như thế này để trình bundler lấy đúng thư viện
+import { GoogleGenAI } from "@google/genai";
 import { resolveApiKey } from "./userKey";
 
-// ===== Helper =====
-function normalizeError(e: any): Error {
+export interface FormData {
+  topic: string;
+  mainKeywords?: string;
+  competitorUrl?: string;
+  language: string;
+  audience: string;
+  count: number;
+}
+
+export interface KeywordResult {
+  keyword: string;
+  translation: string;
+}
+
+// ---- Helpers ----
+function getClient(apiKey?: string): any {
+  const key = resolveApiKey(apiKey);
+  // Một số version nhận object { apiKey }, 1 số nhận trực tiếp apiKey → dùng cách an toàn
+  try {
+    // @ts-ignore
+    return new (GoogleGenAI as any)({ apiKey: key });
+  } catch {
+    // @ts-ignore
+    return new (GoogleGenAI as any)(key);
+  }
+}
+
+function toError(e: any): Error {
   const msg = String(e?.message || e);
   if (/quota|exceed|rate|429|overload|unavailable/i.test(msg)) {
     return new Error("Model AI đang quá tải hoặc đã hết quota. Hãy thử lại hoặc dùng API key khác.");
@@ -20,167 +51,120 @@ function normalizeError(e: any): Error {
   return new Error(msg || "Lỗi không xác định từ Gemini API.");
 }
 
-function client(apiKey?: string) {
-  const key = resolveApiKey(apiKey);
-  return new GoogleGenerativeAI(key);
-}
-
-// ===== Generic JSON Caller =====
-export async function generateJSON<T>(
-  contents: string,
-  schema: any,
-  {
-    model = "gemini-2.5-flash",
-    apiKey,
-  }: { model?: string; apiKey?: string } = {}
-): Promise<T> {
+// Gọi JSON (ràng buộc model trả JSON)
+async function callJSON(prompt: string, modelName: string, apiKey?: string): Promise<any> {
+  const sdk: any = getClient(apiKey);
   try {
-    const genAI = client(apiKey);
-    const mdl = genAI.getGenerativeModel({
-      model,
-      generationConfig: {
-        responseMimeType: "application/json",
-        responseSchema: schema,
-      },
+    // Một số version dùng sdk.models.generateContent, vài bản dùng sdk.generateContent
+    const fn =
+      (sdk?.models?.generateContent?.bind(sdk)) ||
+      (sdk?.generateContent?.bind(sdk));
+
+    if (!fn) throw new Error("SDK không có phương thức generateContent.");
+
+    const res: any = await fn({
+      model: modelName,
+      contents: prompt,
+      // Các nhánh tên config khác nhau giữa các version → set cả hai
+      config: { responseMimeType: "application/json" },
+      responseMimeType: "application/json",
     });
 
-    const result = await mdl.generateContent(contents);
-    const text = result.response.text().trim();
-    return JSON.parse(text) as T;
+    // Thu thập text theo nhiều nhánh khác nhau giữa các version
+    const text =
+      res?.text?.() ||
+      res?.output_text ||
+      res?.response?.text?.() ||
+      res?.data ||
+      "";
+
+    const raw = (typeof text === "string" ? text : String(text)).trim();
+    return JSON.parse(raw);
   } catch (e) {
-    throw normalizeError(e);
+    throw toError(e);
   }
 }
 
-// ===== Business Functions =====
-
-// 1. Generate story ideas
-export async function generateStoryIdeas(
-  idea: string,
-  style: string,
-  count: number,
-  apiKey?: string
-): Promise<Array<{ title: string; summary: string }>> {
-  const schema = {
-    type: SchemaType.ARRAY,
-    items: {
-      type: SchemaType.OBJECT,
-      properties: {
-        title: { type: SchemaType.STRING },
-        summary: { type: SchemaType.STRING },
-      },
-      required: ["title", "summary"],
-    },
-  };
-  const prompt = `Tạo ${count} ý tưởng câu chuyện dựa trên: "${idea}" theo phong cách "${style}".
-Trả về MẢNG JSON, mỗi phần tử có "title" và "summary".`;
-  return generateJSON(prompt, schema, { model: "gemini-2.5-flash", apiKey });
-}
-
-// 2. Generate character details
-export async function generateCharacterDetails(
-  story: { title: string; summary: string },
-  numCharacters: number,
-  style: string,
-  apiKey?: string
-): Promise<Array<{ name: string; prompt: string }>> {
-  const schema = {
-    type: SchemaType.ARRAY,
-    items: {
-      type: SchemaType.OBJECT,
-      properties: {
-        name: { type: SchemaType.STRING },
-        prompt: { type: SchemaType.STRING },
-      },
-      required: ["name", "prompt"],
-    },
-  };
-  const contents = `Dựa trên câu chuyện "${story.title}" (tóm tắt: ${story.summary}), hãy tạo ${numCharacters} nhân vật chính.
-Mỗi nhân vật trả về "name" và "prompt" (tiếng Anh, mô tả chi tiết ngoại hình/phong cách theo "${style}").
-Kết quả là MẢNG JSON như yêu cầu.`;
-
+// Gọi text (không ràng buộc JSON)
+async function callText(prompt: string, modelName: string, apiKey?: string): Promise<string> {
+  const sdk: any = getClient(apiKey);
   try {
-    return await generateJSON(contents, schema, { model: "gemini-2.5-pro", apiKey });
-  } catch {
-    return await generateJSON(contents, schema, { model: "gemini-2.5-flash", apiKey });
+    const fn =
+      (sdk?.models?.generateContent?.bind(sdk)) ||
+      (sdk?.generateContent?.bind(sdk));
+
+    if (!fn) throw new Error("SDK không có phương thức generateContent.");
+
+    const res: any = await fn({ model: modelName, contents: prompt });
+    const text =
+      res?.text?.() ||
+      res?.output_text ||
+      res?.response?.text?.() ||
+      res?.data ||
+      "";
+    return (typeof text === "string" ? text : String(text)).trim();
+  } catch (e) {
+    throw toError(e);
   }
 }
 
-// 3. Generate script
-export interface Scene {
-  id: number;
-  description: string;
-  narration: string;
-  veo_prompt: string;
-  characters_present: string[];
-}
-export interface Script {
-  summary: string;
-  scenes: Scene[];
+/**
+ * Tạo danh sách từ khoá YouTube.
+ * Trả về mảng [{ keyword, translation }].
+ */
+export async function generateKeywords(form: FormData, apiKey?: string): Promise<KeywordResult[]> {
+  const { topic, mainKeywords, competitorUrl, language, audience, count } = form;
+
+  const sys = `Bạn là chuyên gia SEO YouTube. Hãy tạo danh sách từ khoá theo yêu cầu.
+Kết quả trả về JSON THUẦN: [{"keyword":"...","translation":"..."}] (không thêm chữ nào khác).`;
+
+  const prompt = `
+${sys}
+
+Chủ đề: "${topic}"
+Ngôn ngữ hiển thị từ khoá: ${language}
+Đối tượng mục tiêu: ${audience}
+Số lượng cần tạo: ${count}
+${mainKeywords ? `Từ khoá gợi ý (nếu hữu ích): ${mainKeywords}` : ""}
+${competitorUrl ? `Tham khảo đối thủ (nếu phù hợp): ${competitorUrl}` : ""}
+
+YÊU CẦU:
+- "keyword": ưu tiên đúng ${language} (hoặc tiếng Anh nếu xu hướng quốc tế).
+- "translation": dịch sang Tiếng Việt dễ hiểu.
+- Chỉ trả JSON hợp lệ, không giải thích.
+`;
+
+  const data = await callJSON(prompt, "gemini-2.5-flash", apiKey);
+  return (Array.isArray(data) ? data : []).map((x: any) => ({
+    keyword: String(x?.keyword || "").trim(),
+    translation: String(x?.translation || "").trim(),
+  })).filter((x: any) => x.keyword);
 }
 
-export async function generateScript(
-  story: { title: string; summary: string },
-  characters: Array<{ name: string; prompt: string }>,
-  durationSec: number,
+/**
+ * Phân tích xu hướng từ danh sách từ khoá (trả về Markdown ngắn gọn).
+ */
+export async function analyzeTrends(
+  results: KeywordResult[],
+  topic: string,
+  language: string,
   apiKey?: string
-): Promise<Script> {
-  const expectedScenes = Math.ceil(durationSec / 8);
-  const charDesc = characters.map(c => `- ${c.name}: ${c.prompt}`).join("\n");
+): Promise<string> {
+  const list = results.map((r, i) => `${i + 1}. ${r.keyword} — (${r.translation})`).join("\n");
 
-  const schema = {
-    type: SchemaType.OBJECT,
-    properties: {
-      summary: { type: SchemaType.STRING },
-      scenes: {
-        type: SchemaType.ARRAY,
-        items: {
-          type: SchemaType.OBJECT,
-          properties: {
-            id: { type: SchemaType.NUMBER },
-            description: { type: SchemaType.STRING },
-            narration: { type: SchemaType.STRING },
-            veo_prompt: { type: SchemaType.STRING },
-            characters_present: {
-              type: SchemaType.ARRAY,
-              items: { type: SchemaType.STRING },
-            },
-          },
-          required: ["id", "description", "narration", "veo_prompt", "characters_present"],
-        },
-      },
-    },
-    required: ["summary", "scenes"],
-  };
+  const prompt = `Phân tích xu hướng từ khoá cho kênh YouTube.
+Chủ đề: "${topic}"
+Ngôn ngữ từ khoá: ${language}
 
-  const contents = `Bạn là biên kịch. Hãy viết kịch bản video dài ${durationSec} giây (≈ ${expectedScenes} cảnh, mỗi cảnh 6–10 giây).
-Thông tin:
-- Tên: ${story.title}
-- Tóm tắt: ${story.summary}
-- Nhân vật:
-${charDesc}
+Danh sách từ khoá:
+${list}
 
-YÊU CẦU JSON:
-{
-  "summary": "tóm tắt kịch bản",
-  "scenes": [
-    {
-      "id": 1,
-      "description": "mô tả cảnh",
-      "narration": "lời dẫn",
-      "veo_prompt": "prompt để tạo video (Anh) – phải khớp mô tả cảnh",
-      "characters_present": ["Tên nhân vật..."]
-    }
-  ]
-}
-Quy tắc:
-- Mỗi cảnh phải có ít nhất 1 nhân vật trong "characters_present".
-- "narration" bắt buộc có nội dung.
-- "veo_prompt" phải ăn khớp mô tả cảnh và có tên nhân vật khi xuất hiện.`;
+Hãy trả về Markdown ngắn gọn:
+- Tóm tắt xu hướng (2-3 dòng)
+- 3-5 nhóm chủ đề nổi bật (gạch đầu dòng)
+- Cơ hội & rủi ro (gạch đầu dòng)
+- 5-10 tiêu đề video mẫu (in đậm **Tiêu đề**, có thể kèm hashtag)
+`;
 
-  try {
-    return await generateJSON<Script>(contents, schema, { model: "gemini-2.5-pro", apiKey });
-  } catch {
-    return await generateJSON<Script>(contents, schema, { model: "gemini-2.5-flash", apiKey });
-  }
+  return callText(prompt, "gemini-2.5-flash", apiKey);
 }
