@@ -1,4 +1,4 @@
-// ----- NỘI DUNG MỚI ĐÃ SỬA LỖI CHO FILE services/geminiService.ts -----
+// ----- NỘI DUNG MỚI - SỬ DỤNG GEMINI 1.5 PRO -----
 
 import { GoogleGenAI, Type } from "@google/genai";
 import type { FormData, KeywordResult } from "../types";
@@ -52,8 +52,8 @@ Return the result as a single JSON object. Do not include any text, explanation,
 
   try {
     const response = await ai.models.generateContent({
-      // *** SỬA LỖI: Đổi tên model ở đây ***
-      model: "gemini-1.5-flash", 
+      // *** THAY ĐỔI: Sử dụng model Gemini 1.5 Pro ***
+      model: "gemini-1.5-pro-latest", 
       contents: prompt,
       config: {
         responseMimeType: "application/json",
@@ -107,8 +107,8 @@ Hãy trình bày câu trả lời bằng tiếng Việt, sử dụng định d�
 
   try {
     const response = await ai.models.generateContent({
-      // *** SỬA LỖI: Đổi tên model ở đây ***
-      model: "gemini-1.5-flash", 
+      // *** THAY ĐỔI: Sử dụng model Gemini 1.5 Pro ***
+      model: "gemini-1.5-pro-latest", 
       contents: prompt,
       config: {
         temperature: 0.7,
