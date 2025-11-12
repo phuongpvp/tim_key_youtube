@@ -220,7 +220,7 @@ function App() {
         {/* Main Content */}
         <main>
           {/* Form Card */}
-          {!results and (
+          {!results && (
              <div className="bg-slate-800/50 p-6 rounded-2xl border border-slate-700 shadow-lg backdrop-blur-sm">
                 <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     {/* Left Column */}
