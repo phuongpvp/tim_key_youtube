@@ -1,0 +1,5 @@
+{
+  "name": "YouTube Keyword Finder",
+  "description": "A powerful tool to automatically find and suggest YouTube video keywords based on topics, languages, and target audiences. Includes features for topic suggestions and exporting results to Excel.",
+  "requestFramePermissions": []
+}
