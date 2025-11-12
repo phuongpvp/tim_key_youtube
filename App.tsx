@@ -1,7 +1,8 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { generateKeywords, analyzeTrends } from './services/geminiService';
 import type { FormData, KeywordResult } from './types';
 import { SUGGESTED_TOPICS, LANGUAGES, AUDIENCES } from './constants';
+import { getUserApiKey, setUserApiKey, clearUserApiKey } from './services/userKey';
 
 // --- Helper Functions & Components (defined outside App to prevent re-renders) ---
 
@@ -16,11 +17,11 @@ const exportToExcel = (data: KeywordResult[], topic: string) => {
     'Từ khóa': item.keyword,
     'Bản dịch Tiếng Việt': item.translation,
   }));
-  
+
   const worksheet = window.XLSX.utils.json_to_sheet(formattedData);
   const workbook = window.XLSX.utils.book_new();
   window.XLSX.utils.book_append_sheet(workbook, worksheet, 'Keywords');
-  
+
   // Auto-fit columns
   const cols = [{ wch: 40 }, { wch: 40 }];
   worksheet['!cols'] = cols;
@@ -46,6 +47,45 @@ const IconClipboard: React.FC<{copied: boolean}> = ({ copied }) => (
     </svg>
 );
 
+// === API Key Modal ===
+function ApiKeyModal({ open, onClose, onApplied }:{ open:boolean; onClose:()=>void; onApplied:(k:string)=>void }) {
+  const [temp, setTemp] = useState('');
+  if (!open) return null;
+
+  const apply = () => {
+    if (!temp || temp.trim().length < 10) {
+      alert('API key không hợp lệ');
+      return;
+    }
+    setUserApiKey(temp);
+    onApplied(temp.trim());
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50" onClick={onClose}>
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md p-6 text-slate-100" onClick={e=>e.stopPropagation()}>
+        <h3 className="text-lg font-semibold">Nhập API Key của bạn</h3>
+        <p className="text-sm text-slate-400 mt-1">Key chỉ lưu trên trình duyệt của bạn (localStorage).</p>
+        <input
+          type="password"
+          placeholder="AIza..."
+          value={temp}
+          onChange={(e)=>setTemp(e.target.value)}
+          className="w-full mt-3 bg-slate-800 border border-slate-700 rounded-md px-3 py-2 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 outline-none"
+        />
+        <div className="mt-4 flex gap-2">
+          <button onClick={apply} className="bg-cyan-500 text-slate-900 font-semibold px-4 py-2 rounded-md hover:bg-cyan-400">Áp dụng</button>
+          <button onClick={onClose} className="border border-slate-600 px-4 py-2 rounded-md">Huỷ</button>
+        </div>
+        <p className="text-xs text-slate-500 mt-3">
+          Nếu bạn chưa có key: vào AI Studio → API Keys → Create API key.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 // --- Main App Component ---
 
 function App() {
@@ -62,12 +102,25 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
-  
+
+  // API key UI
+  const [apiKey, setApiKey] = useState<string | null>(null);
+  const [showKeyModal, setShowKeyModal] = useState<boolean>(false);
+
   // State for Trend Analysis
   const [isTrendLoading, setIsTrendLoading] = useState<boolean>(false);
   const [trendAnalysisResult, setTrendAnalysisResult] = useState<string | null>(null);
   const [isTrendModalOpen, setIsTrendModalOpen] = useState<boolean>(false);
   const [trendError, setTrendError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const k = getUserApiKey();
+    if (!k) {
+      setShowKeyModal(true); // auto hiện popup nếu chưa có key
+    } else {
+      setApiKey(k);
+    }
+  }, []);
 
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
@@ -92,11 +145,16 @@ function App() {
       setError('Chủ đề là bắt buộc.');
       return;
     }
+    if (!getUserApiKey()) {
+      setShowKeyModal(true);
+      return;
+    }
     setError(null);
     setIsLoading(true);
     setResults(null);
     try {
-      const keywords = await generateKeywords(formData);
+      // service sẽ tự đọc key từ localStorage; truyền apiKey nếu muốn
+      const keywords = await generateKeywords(formData, apiKey || undefined);
       setResults(keywords);
     } catch (err: any) {
       setError(err.message || 'An unknown error occurred.');
@@ -108,19 +166,18 @@ function App() {
   const handleNewSearch = () => {
     setResults(null);
     setError(null);
-    // Optionally reset form:
-    // setFormData({ topic: '', mainKeywords: '', competitorUrl: '', language: 'English', audience: 'Foreign viewers', count: 10 });
   };
-  
+
   const handleAnalyzeTrends = async () => {
     if (!results) return;
+    if (!getUserApiKey()) { setShowKeyModal(true); return; }
 
     setIsTrendLoading(true);
     setTrendError(null);
     setTrendAnalysisResult(null);
 
     try {
-        const analysis = await analyzeTrends(results, formData.topic, formData.language);
+        const analysis = await analyzeTrends(results, formData.topic, formData.language, apiKey || undefined);
         setTrendAnalysisResult(analysis);
         setIsTrendModalOpen(true);
     } catch (err: any) {
@@ -137,16 +194,33 @@ function App() {
         {/* Header */}
         <header className="flex items-center gap-4 mb-8">
           <IconLogo />
-          <div>
+          <div className="flex-1">
             <h1 className="text-2xl sm:text-3xl font-bold text-white">Tool Tìm Key Youtube</h1>
             <p className="text-sm text-cyan-400">Công cụ siêu đỉnh để tự động hoá mọi việc. Hotline: 0916 590 161</p>
+          </div>
+          {/* API Key actions */}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowKeyModal(true)}
+              className="bg-cyan-600 text-white text-sm font-semibold px-3 py-2 rounded-md hover:bg-cyan-500"
+            >
+              {apiKey ? 'API Key đã chọn ✅' : 'Nhập API Key'}
+            </button>
+            {apiKey && (
+              <button
+                onClick={() => { clearUserApiKey(); setApiKey(null); setShowKeyModal(true); }}
+                className="border border-slate-600 text-slate-200 text-sm px-3 py-2 rounded-md hover:bg-slate-800"
+              >
+                Xoá key
+              </button>
+            )}
           </div>
         </header>
 
         {/* Main Content */}
         <main>
           {/* Form Card */}
-          {!results && (
+          {!results and (
              <div className="bg-slate-800/50 p-6 rounded-2xl border border-slate-700 shadow-lg backdrop-blur-sm">
                 <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     {/* Left Column */}
@@ -283,7 +357,7 @@ function App() {
           </div>
         </div>
       )}
-      
+
       {/* Trend Analysis Modal */}
       {isTrendModalOpen && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50 backdrop-blur-sm" onClick={() => setIsTrendModalOpen(false)}>
@@ -303,6 +377,12 @@ function App() {
             </div>
         </div>
       )}
+
+      <ApiKeyModal
+        open={showKeyModal}
+        onClose={() => setShowKeyModal(false)}
+        onApplied={(k)=>setApiKey(k)}
+      />
     </div>
   );
 }
