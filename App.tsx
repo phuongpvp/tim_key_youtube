@@ -1,27 +1,35 @@
-// ----- NỘI DUNG MỚI CHO FILE App.tsx -----
-
 import React, { useState, useCallback } from 'react';
-import { useApiKey, ApiKeyInput } from './ApiKeyManager'; // Import bộ quản lý key
 import { generateKeywords, analyzeTrends } from './services/geminiService';
 import type { FormData, KeywordResult } from './types';
 import { SUGGESTED_TOPICS, LANGUAGES, AUDIENCES } from './constants';
 
-// --- Helper Functions & Components (Không thay đổi) ---
+// --- Helper Functions & Components (defined outside App to prevent re-renders) ---
+
 declare global {
   interface Window {
     XLSX: any;
   }
 }
+
 const exportToExcel = (data: KeywordResult[], topic: string) => {
-  const formattedData = data.map(item => ({ 'Từ khóa': item.keyword, 'Bản dịch Tiếng Việt': item.translation }));
+  const formattedData = data.map(item => ({
+    'Từ khóa': item.keyword,
+    'Bản dịch Tiếng Việt': item.translation,
+  }));
+  
   const worksheet = window.XLSX.utils.json_to_sheet(formattedData);
   const workbook = window.XLSX.utils.book_new();
   window.XLSX.utils.book_append_sheet(workbook, worksheet, 'Keywords');
+  
+  // Auto-fit columns
   const cols = [{ wch: 40 }, { wch: 40 }];
   worksheet['!cols'] = cols;
+
   const fileName = `youtube_keywords_${topic.replace(/\s+/g, '_')}.xlsx`;
   window.XLSX.writeFile(workbook, fileName);
 };
+
+// SVG Icon Components
 const IconLogo: React.FC = () => (
   <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
     <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
@@ -29,16 +37,18 @@ const IconLogo: React.FC = () => (
 );
 const IconClipboard: React.FC<{copied: boolean}> = ({ copied }) => (
     copied ? 
-    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+    </svg>
     :
-    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+    </svg>
 );
 
-// --- Component chứa Tool chính của bạn ---
-// Toàn bộ code cũ của bạn được chuyển vào đây
-const MainToolComponent = () => {
-  const { apiKey, setApiKey } = useApiKey(); // Lấy API Key và hàm để thay đổi key
+// --- Main App Component ---
 
+function App() {
   const [formData, setFormData] = useState<FormData>({
     topic: '',
     mainKeywords: '',
@@ -53,6 +63,7 @@ const MainToolComponent = () => {
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   
+  // State for Trend Analysis
   const [isTrendLoading, setIsTrendLoading] = useState<boolean>(false);
   const [trendAnalysisResult, setTrendAnalysisResult] = useState<string | null>(null);
   const [isTrendModalOpen, setIsTrendModalOpen] = useState<boolean>(false);
@@ -77,10 +88,6 @@ const MainToolComponent = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!apiKey) { // Kiểm tra lại lần nữa cho chắc
-      setError('Lỗi: Không tìm thấy API Key.');
-      return;
-    }
     if (!formData.topic) {
       setError('Chủ đề là bắt buộc.');
       return;
@@ -89,8 +96,7 @@ const MainToolComponent = () => {
     setIsLoading(true);
     setResults(null);
     try {
-      // *** THAY ĐỔI QUAN TRỌNG: Truyền apiKey vào hàm generateKeywords ***
-      const keywords = await generateKeywords(formData, apiKey);
+      const keywords = await generateKeywords(formData);
       setResults(keywords);
     } catch (err: any) {
       setError(err.message || 'An unknown error occurred.');
@@ -102,22 +108,24 @@ const MainToolComponent = () => {
   const handleNewSearch = () => {
     setResults(null);
     setError(null);
+    // Optionally reset form:
+    // setFormData({ topic: '', mainKeywords: '', competitorUrl: '', language: 'English', audience: 'Foreign viewers', count: 10 });
   };
   
   const handleAnalyzeTrends = async () => {
-    if (!results || !apiKey) return;
+    if (!results) return;
 
     setIsTrendLoading(true);
     setTrendError(null);
     setTrendAnalysisResult(null);
+
     try {
-        // *** THAY ĐỔI QUAN TRỌNG: Truyền apiKey vào hàm analyzeTrends ***
-        const analysis = await analyzeTrends(results, formData.topic, formData.language, apiKey);
+        const analysis = await analyzeTrends(results, formData.topic, formData.language);
         setTrendAnalysisResult(analysis);
         setIsTrendModalOpen(true);
     } catch (err: any) {
         setTrendError(err.message || 'An unknown error occurred during trend analysis.');
-        setIsTrendModalOpen(true);
+        setIsTrendModalOpen(true); // Open modal to show the error
     } finally {
         setIsTrendLoading(false);
     }
@@ -126,22 +134,16 @@ const MainToolComponent = () => {
   return (
     <div className="min-h-screen bg-slate-900 text-slate-200 font-sans p-4 sm:p-6 lg:p-8">
       <div className="max-w-4xl mx-auto">
-        <header className="flex items-center justify-between gap-4 mb-8">
-          <div className="flex items-center gap-4">
-            <IconLogo />
-            <div>
-              <h1 className="text-2xl sm:text-3xl font-bold text-white">Tool Tìm Key Youtube</h1>
-              <p className="text-sm text-cyan-400">Công cụ siêu đỉnh để tự động hoá mọi việc. Hotline: 0916 590 161</p>
-            </div>
+        {/* Header */}
+        <header className="flex items-center gap-4 mb-8">
+          <IconLogo />
+          <div>
+            <h1 className="text-2xl sm:text-3xl font-bold text-white">Tool Tìm Key Youtube</h1>
+            <p className="text-sm text-cyan-400">Công cụ siêu đỉnh để tự động hoá mọi việc. Hotline: 0916 590 161</p>
           </div>
-          <button
-            onClick={() => setApiKey(null)}
-            className="bg-slate-700 text-slate-300 text-xs font-semibold py-2 px-3 rounded-lg hover:bg-red-600 hover:text-white transition"
-          >
-            Thay đổi Key
-          </button>
         </header>
 
+        {/* Main Content */}
         <main>
           {/* Form Card */}
           {!results && (
@@ -181,7 +183,7 @@ const MainToolComponent = () => {
                             </select>
                         </div>
                         <div>
-                            <label className="block text-sm font-medium mb-2 text-cyan-300"># Số lượng từ khóa</label>
+                            <label className="block text-sm font-medium mb-2 text-cyan-300">Q Số lượng từ khóa</label>
                             <input type="number" name="count" value={formData.count} onChange={handleInputChange} min="1" max="50" className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-2 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 outline-none transition" />
                         </div>
                     </div>
@@ -262,30 +264,47 @@ const MainToolComponent = () => {
           )}
         </main>
       </div>
-      {/* Modals... */}
-      {isModalOpen && ( <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50 backdrop-blur-sm" onClick={() => setIsModalOpen(false)}> <div className="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-3xl max-h-[80vh] overflow-y-auto p-6" onClick={e => e.stopPropagation()}> <div className="flex justify-between items-center mb-4"> <h2 className="text-xl font-bold text-white">Danh Sách Chủ Đề Gợi Ý</h2> <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-white text-3xl leading-none">&times;</button> </div> <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3"> {SUGGESTED_TOPICS.map(topic => ( <button key={topic} onClick={() => handleSuggestionClick(topic)} className="bg-slate-700 text-center text-sm p-3 rounded-lg hover:bg-cyan-600 hover:text-white transition duration-200"> {topic} </button> ))} </div> </div> </div> )}
-      {isTrendModalOpen && ( <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50 backdrop-blur-sm" onClick={() => setIsTrendModalOpen(false)}> <div className="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-3xl max-h-[80vh] flex flex-col p-6" onClick={e => e.stopPropagation()}> <div className="flex justify-between items-center mb-4 flex-shrink-0"> <h2 className="text-xl font-bold text-white">Phân Tích Xu Hướng Từ Khóa</h2> <button onClick={() => setIsTrendModalOpen(false)} className="text-slate-400 hover:text-white text-3xl leading-none">&times;</button> </div> <div className="overflow-y-auto pr-2 text-slate-300"> {trendError ? ( <p className="text-red-400">{trendError}</p> ) : ( <div className="whitespace-pre-wrap" dangerouslySetInnerHTML={{ __html: trendAnalysisResult ? trendAnalysisResult.replace(/\*\*(.*?)\*\*/g, '<strong class="text-white">$1</strong>').replace(/\n/g, '<br />') : '' }}> </div> )} </div> </div> </div> )}
+
+      {/* Suggestions Modal */}
+      {isModalOpen && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50 backdrop-blur-sm" onClick={() => setIsModalOpen(false)}>
+          <div className="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-3xl max-h-[80vh] overflow-y-auto p-6" onClick={e => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-bold text-white">Danh Sách Chủ Đề Gợi Ý</h2>
+                <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-white text-3xl leading-none">&times;</button>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+              {SUGGESTED_TOPICS.map(topic => (
+                <button key={topic} onClick={() => handleSuggestionClick(topic)} className="bg-slate-700 text-center text-sm p-3 rounded-lg hover:bg-cyan-600 hover:text-white transition duration-200">
+                  {topic}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {/* Trend Analysis Modal */}
+      {isTrendModalOpen && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50 backdrop-blur-sm" onClick={() => setIsTrendModalOpen(false)}>
+            <div className="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-3xl max-h-[80vh] flex flex-col p-6" onClick={e => e.stopPropagation()}>
+                <div className="flex justify-between items-center mb-4 flex-shrink-0">
+                    <h2 className="text-xl font-bold text-white">Phân Tích Xu Hướng Từ Khóa</h2>
+                    <button onClick={() => setIsTrendModalOpen(false)} className="text-slate-400 hover:text-white text-3xl leading-none">&times;</button>
+                </div>
+                <div className="overflow-y-auto pr-2 text-slate-300">
+                    {trendError ? (
+                        <p className="text-red-400">{trendError}</p>
+                    ) : (
+                        <div className="whitespace-pre-wrap" dangerouslySetInnerHTML={{ __html: trendAnalysisResult ? trendAnalysisResult.replace(/\*\*(.*?)\*\*/g, '<strong class="text-white">$1</strong>').replace(/\n/g, '<br />') : '' }}>
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+      )}
     </div>
   );
-}
-
-// --- Component App chính (gatekeeper) ---
-// Component này sẽ quyết định hiển thị màn hình nào
-function App() {
-  const { apiKey, isLoading } = useApiKey();
-
-  // Màn hình chờ trong lúc kiểm tra key
-  if (isLoading) {
-    return <div className="bg-slate-900 text-slate-200 min-h-screen flex items-center justify-center">Đang tải...</div>;
-  }
-
-  // Nếu chưa có key, hiện form nhập
-  if (!apiKey) {
-    return <ApiKeyInput />;
-  }
-
-  // Nếu có key rồi, hiện tool chính
-  return <MainToolComponent />;
 }
 
 export default App;
