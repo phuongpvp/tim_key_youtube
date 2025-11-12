@@ -1,5 +1,3 @@
-// ----- NỘI DUNG MỚI - SỬ DỤNG GEMINI 1.5 PRO -----
-
 import { GoogleGenAI, Type } from "@google/genai";
 import type { FormData, KeywordResult } from "../types";
 
@@ -28,8 +26,8 @@ const KEYWORD_SCHEMA = {
   required: ["keywords"],
 };
 
-export const generateKeywords = async (formData: FormData, apiKey: string): Promise<KeywordResult[]> => {
-  const ai = new GoogleGenAI({ apiKey: apiKey });
+export const generateKeywords = async (formData: FormData): Promise<KeywordResult[]> => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
 
   const prompt = `You are an expert in YouTube SEO and content strategy. Your task is to generate a list of high-traffic, low-competition keywords for a YouTube video.
 
@@ -52,8 +50,7 @@ Return the result as a single JSON object. Do not include any text, explanation,
 
   try {
     const response = await ai.models.generateContent({
-      // *** THAY ĐỔI: Sử dụng model Gemini 1.5 Pro ***
-      model: "gemini-1.5-pro-latest", 
+      model: "gemini-2.5-flash",
       contents: prompt,
       config: {
         responseMimeType: "application/json",
@@ -71,19 +68,16 @@ Return the result as a single JSON object. Do not include any text, explanation,
     } else {
       throw new Error("Invalid JSON structure received from API.");
     }
-  } catch (error: any) {
+  } catch (error) {
     console.error("Error calling Gemini API:", error);
-    if (error.message.includes('API key not valid')) {
-        throw new Error("API Key không hợp lệ. Vui lòng kiểm tra lại key của bạn.");
-    }
     throw new Error(
-      "Không thể tạo từ khóa. Vui lòng kiểm tra lại thông tin đầu vào hoặc thử lại sau."
+      "Failed to generate keywords. Please check your inputs or try again later."
     );
   }
 };
 
-export const analyzeTrends = async (keywords: KeywordResult[], topic: string, language: string, apiKey: string): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey: apiKey });
+export const analyzeTrends = async (keywords: KeywordResult[], topic: string, language: string): Promise<string> => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
 
   const keywordList = keywords.map(k => `- "${k.keyword}" (${k.translation})`).join('\n');
 
@@ -107,8 +101,7 @@ Hãy trình bày câu trả lời bằng tiếng Việt, sử dụng định d�
 
   try {
     const response = await ai.models.generateContent({
-      // *** THAY ĐỔI: Sử dụng model Gemini 1.5 Pro ***
-      model: "gemini-1.5-pro-latest", 
+      model: "gemini-2.5-flash",
       contents: prompt,
       config: {
         temperature: 0.7,
@@ -117,11 +110,8 @@ Hãy trình bày câu trả lời bằng tiếng Việt, sử dụng định d�
     });
     
     return response.text;
-  } catch (error: any) {
+  } catch (error) {
     console.error("Error calling Gemini API for trend analysis:", error);
-    if (error.message.includes('API key not valid')) {
-        throw new Error("API Key không hợp lệ. Vui lòng kiểm tra lại key của bạn.");
-    }
     throw new Error(
       "Không thể phân tích xu hướng. Vui lòng thử lại sau."
     );
