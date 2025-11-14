@@ -1,0 +1,48 @@
+# Tên của quy trình tự động
+name: Deploy Code to Hosting
+
+# Chạy khi nào? -> Khi đẩy code lên nhánh 'main'
+on:
+  push:
+    branches:
+      - main  # Nếu nhánh chính của bạn tên là 'master' thì sửa 'main' thành 'master'
+
+# Làm gì?
+jobs:
+  web-deploy:
+    name: 🎉 Deploy
+    runs-on: ubuntu-latest # Dùng một máy chủ ảo của GitHub để chạy
+    steps:
+    # 1. Lấy code mới nhất về
+    - name: 🚚 Get latest code
+      uses: actions/checkout@v4
+
+    # 2. Cài đặt Node.js phiên bản 18 (hoặc 20)
+    - name: 🔧 Use Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+
+    # 3. Cài đặt thư viện (giống hệt npm install)
+    - name: 📦 Install Dependencies
+      run: npm install
+
+    # 4. Build code (giống hệt npm run build)
+    - name: 🏗️ Build Project
+      run: npm run build
+
+    # 5. Upload file đã build (thư mục dist) lên hosting
+    - name: 📂 Sync files to Hosting via FTP
+      uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+      with:
+        # Lấy thông tin từ "két sắt" (Bước 2)
+        server: ${{ secrets.FTP_SERVER }}
+        username: ${{ secrets.FTP_USERNAME }}
+        password: ${{ secrets.FTP_PASSWORD }}
+        
+        # Thư mục trên máy GitHub (Nơi chứa code đã build)
+        local-dir: ./dist/        
+        
+        # Thư mục trên Hosting (Nơi bạn muốn up code vào)
+        # SỬA CHỖ NÀY CHO ĐÚNG VỚI HOSTING CỦA BẠN
+        server-dir: ./public_html/seo-key-youtube/
